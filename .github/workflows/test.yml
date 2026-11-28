@@ -8,7 +8,7 @@
 env:
   AGDA_TESTS_OPTIONS: -j${PARALLEL_TESTS} --hide-successes
   GHC_VER: 9.14.1
-  PARALLEL_TESTS: 2
+  PARALLEL_TESTS: 4
   STACK: stack --system-ghc
   TASTY_ANSI_TRICKS: 'false'
 jobs:
@@ -259,7 +259,7 @@ jobs:
         # ASR (2021-01-17). `cabal update` is required due to #5138.
         # We should also use `stack` in this test.
         cabal update
-        make AGDA_OPTS="-j" std-lib-test
+        make std-lib-test
     - if: always()
       name: Benchmark
       run: |
