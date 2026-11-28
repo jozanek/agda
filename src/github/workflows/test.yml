@@ -304,7 +304,9 @@ jobs:
         # ASR (2021-01-17). `cabal update` is required due to #5138.
         # We should also use `stack` in this test.
         cabal update
-        make AGDA_OPTS="-j" std-lib-test
+        # PARALLEL_TESTS is 2 for the test suites (see env).
+        # Check the library with all cores.
+        make PARALLEL_TESTS=$(nproc) std-lib-test
 
     # Andreas, 2023-09-13: Benchmark `any` uses the standard library,
     # so benchmarks should be run here (or split out the std-lib benchmarks).
@@ -424,8 +426,10 @@ jobs:
     # - *cache
     - *agda_setup
 
+    # PARALLEL_TESTS is 2 for the test suites (see env).
+    # Check the library with all cores.
     - name: "Cubical library test"
-      run: make cubical-test
+      run: make PARALLEL_TESTS=$(nproc) cubical-test
 
     - name: "Successful tests using the cubical library"
       run: make cubical-succeed
