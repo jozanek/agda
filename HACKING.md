@@ -319,6 +319,8 @@ Testing and documentation
 
 * Test parallelization can be controlled via the `PARALLEL_TESTS` Makefile
   variable. If unset, it will default to the number of CPUs available.
+  The variable also sets the number of cores (option `-j`) that Agda uses
+  in `std-lib-test` and `cubical-test`.
   This variable can be customized per-run as usual:
   ```sh
     make PARALLEL_TESTS=4 test

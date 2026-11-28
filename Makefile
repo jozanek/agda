@@ -22,7 +22,9 @@ include ./mk/pretty.mk
 # Run in interactive and parallel mode by default
 
 # You can use the PARALLEL_TESTS variable to control the number of parallel
-# tests. The default is one per processor. Invoke make like this:
+# tests. The default is one per processor. It also sets the number of cores
+# (option -j) that Agda uses to check the standard library and the cubical
+# library. Invoke make like this:
 #   make PARALLEL_TESTS=123 test
 # Or set it in ./mk/config.mk, which is .gitignored
 PARALLEL_TESTS ?= $(shell getconf _NPROCESSORS_ONLN)
@@ -688,29 +690,31 @@ latex-test-quick :
 std-lib-test :
 	@$(call decorate, "Standard library test", \
 		(cd std-lib && cabal run --project-dir=. GenerateEverything && \
-						time $(AGDA_BIN) $(AGDA_OPTS) --ignore-interfaces --no-default-libraries $(PROFILEOPTS) \
+						time $(AGDA_BIN) -j$(PARALLEL_TESTS) $(AGDA_OPTS) --ignore-interfaces --no-default-libraries $(PROFILEOPTS) \
 														 -i. -isrc Everything.agda \
 														 +RTS -s))
 
-# Call goal 'check' directly: cubical's default goal 'build' ignores AGDA_FLAGS.
+# cubical-test and continue-cubical-test call goal 'check' directly:
+# cubical's default goal 'build' ignores AGDA_FLAGS.
 .PHONY : cubical-test ##
 cubical-test :
 	-rm -rf cubical/_build
 	@$(call decorate, "Cubical library test", \
 		time $(MAKE) -C cubical \
-			AGDA_BIN="$(AGDA_BIN)" AGDA_FLAGS="-j" RTS_OPTIONS=$(AGDA_OPTS) \
+			AGDA_BIN="$(AGDA_BIN)" AGDA_FLAGS="-j$(PARALLEL_TESTS)" RTS_OPTIONS=$(AGDA_OPTS) \
 			check)
 
 .PHONY : continue-cubical-test ##
 continue-cubical-test :
 	@$(call decorate, "Continuing cubical library test", \
 		time $(MAKE) -C cubical \
-                  AGDA_BIN=$(AGDA_BIN) RTS_OPTIONS=$(AGDA_OPTS))
+			AGDA_BIN="$(AGDA_BIN)" AGDA_FLAGS="-j$(PARALLEL_TESTS)" RTS_OPTIONS=$(AGDA_OPTS) \
+			check)
 
 .PHONY : continue-std-lib-test ##
 continue-std-lib-test :
 	@(cd std-lib && \
-          time $(AGDA_BIN) $(AGDA_OPTS) $(PROFILEOPTS) --no-default-libraries -i. -isrc Everything.agda +RTS -s)
+          time $(AGDA_BIN) -j$(PARALLEL_TESTS) $(AGDA_OPTS) $(PROFILEOPTS) --no-default-libraries -i. -isrc Everything.agda +RTS -s)
 
 .PHONY : cubical-succeed ##
 cubical-succeed :

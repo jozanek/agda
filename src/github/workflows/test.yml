@@ -332,7 +332,7 @@ jobs:
     # - name: "Sequential standard library build"
     #   run: |
     #     make -C std-lib clean
-    #     make std-lib-test
+    #     make PARALLEL_TESTS=1 std-lib-test
 
 
   # Step 2c: testing the interaction and the LaTeX/HTML backend
