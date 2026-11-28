@@ -1,0 +1,10 @@
+Issue8689EtaContractedPathLambda.agda:21.1-14: error: [UnequalTerms]
+The terms
+  f i0
+and
+  w
+are not equal at type Nat
+when checking that the type
+(f : I → Nat) (w : Nat) → Reveal (w ≡ f i1) f of the generated with
+function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

@@ -1,0 +1,17 @@
+AGDA_FAILURE
+
+ret > ExitFailure 42
+out > Issue8689NeutralFace.agda:35.1-19: error: [UnequalTerms]
+out > The terms
+out >   p i
+out > and
+out >   primPOr i (~ i) (λ ._ → A) (λ ._ → A) _
+out > are not equal at type Type
+out > when checking that the type
+out > Type →
+out > (t : Type) →
+out > hcomp (λ i₁ → primPOr i (~ i) (λ ._ → A) (λ ._ → A)) (p i) ≡
+out > hcomp (λ i₁ → primPOr i (~ i) (λ ._ → A) (λ ._ → A)) (p i)
+out > of the generated with function is well-formed
+out > (https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)
+out >

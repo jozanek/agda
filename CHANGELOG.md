@@ -44,6 +44,26 @@ Language
 
 Changes to type checker and other components defining the Agda language.
 
+* The internal type checker now checks the cubical boundaries:
+  the endpoints of path lambdas and path applications, and the side
+  conditions of `primComp`, `primHComp`, `primTransp`, `primPOr`,
+  `prim^glue` and `prim^glueU`
+  (see [#8689](https://github.com/agda/agda/issues/8689)).
+  Agda uses this checker for the types of with-functions, for
+  `--double-check`, and in some other places, for example for
+  `withReconstructed` in reflection.
+
+  Thus Cubical Agda now rejects ill-typed with-abstractions that it
+  accepted before, for example the `_UsingEq` idiom of the
+  development version of the cubical library.
+
+  Agda can now also reject some well-typed with-abstractions.
+  The type of a with-function is normalised, so it can contain the
+  side condition of a primitive that you did not write.  The
+  conversion checker cannot always check such a side condition if its
+  face contains an interval term that is neutral but not a variable,
+  for example a postulate `i : I` or `h n` with `h : Nat → I`.
+
 Builtins
 --------
 

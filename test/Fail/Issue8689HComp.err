@@ -1,0 +1,11 @@
+Issue8689HComp.agda:22.1-14: error: [UnequalTerms]
+The terms
+  w
+and
+  y
+are not equal at type Nat
+when checking that the type
+(x y : Nat) (p : x ≡ y) (j : I) (w : Nat) →
+Reveal Nat (hcomp (λ i ._ → y) w)
+of the generated with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

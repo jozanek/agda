@@ -1,0 +1,10 @@
+Issue8689IApplyOnFunction.agda:28.1-14: error: [UnequalTerms]
+The terms
+  w
+and
+  f i0
+are not equal at type Nat
+when checking that the type
+(f : I → Nat) (w : Nat) (j : I) → Reveal Nat (f j) of the generated
+with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

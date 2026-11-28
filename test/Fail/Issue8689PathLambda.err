@@ -1,0 +1,12 @@
+Issue8689PathLambda.agda:36.1-37.32: error: [UnequalTerms]
+The terms
+  w
+and
+  n <ᵇ m
+are not equal at type Bool
+when checking that the type
+(n m : Nat) (w : Bool) →
+(min (suc (suc n)) (suc (suc m)) | w , (λ _ → w)) ≡
+suc (min (suc n) (suc m) | w , (λ _ → w))
+of the generated with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

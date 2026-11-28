@@ -1,0 +1,11 @@
+Issue8689ProjectionLike.agda:28.1-14: error: [UnequalTerms]
+The terms
+  w
+and
+  y
+are not equal at type Nat
+when checking that the type
+(x y : Nat) (p : x ≡ y) (j : I) (w : Nat) (g : Nat → Wrap Nat) →
+Reveal Nat (unwrap (hcomp (λ i ._ → g y) (g w)))
+of the generated with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

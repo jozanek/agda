@@ -25,6 +25,7 @@ import Agda.TypeChecking.Datatypes
 import Agda.TypeChecking.Level
 import Agda.TypeChecking.Monad
 import Agda.TypeChecking.Pretty
+import Agda.TypeChecking.Primitive.Cubical.SideConditions (SideCondition(..), cubicalSideCondition)
 import Agda.TypeChecking.ProjectionLike (elimView, LoneProjectionLikeToLambda(..))
 import Agda.TypeChecking.Records (shouldBeProjectible)
 import Agda.TypeChecking.Substitute
@@ -170,8 +171,10 @@ instance CheckInternal Term where
         -- There is no "implicitely applied module telescope" at this stage, so no
         -- need to check it for modal errors, everything is covered by the
         -- variable rule!
-        a <- defType <$> getConstInfo f
-        checkSpine action a (Def f) es cmp t
+        def <- getConstInfo f
+        v' <- checkSpine action (defType def) (Def f) es cmp t
+        checkCubicalSideCondition def es
+        return v'
       MetaV x es -> do -- we assume meta instantiations to be well-typed
         a <- metaType x
         reportSDoc "tc.check.internal" 30 $ "metavariable" <+> prettyTCM x <+> "has type" <+> prettyTCM a
@@ -190,11 +193,13 @@ instance CheckInternal Term where
         compareType cmp lt t
         return $ Lit l
       Lam ai vb  -> do
-        (a, b) <- shouldBePiOrPath t
+        (a, b, endpoints) <- shouldBePiOrPath t
         ai <- checkArgInfo action ai $ domInfo a
         let name = suggests [ Suggestion vb , Suggestion b ]
-        addContext (name, a) $ do
+        v' <- addContext (name, a) $ do
           Lam ai . Abs (absName vb) <$> checkInternal' action (absBody vb) cmp (absBody b)
+        whenJust endpoints $ checkPathLambdaEndpoints b vb
+        return v'
       Pi a b     -> do
         s <- shouldBeSort t
         reportSDoc "tc.check.internal" 30 $ "pi type should have sort" <+> prettyTCM s
@@ -286,8 +291,10 @@ infer u = do
       fst3 <$> inferSpine defaultAction a (Var i) es
     Def f es -> do
       whenJustM (isRelevantProjection f) $ \_ -> nonInferable
-      a <- defType <$> getConstInfo f
-      fst3 <$> inferSpine defaultAction a (Def f) es
+      def <- getConstInfo f
+      a <- fst3 <$> inferSpine defaultAction (defType def) (Def f) es
+      checkCubicalSideCondition def es
+      return a
     MetaV x es -> do -- we assume meta instantiations to be well-typed
       a <- metaType x
       fst3 <$> inferSpine defaultAction a (MetaV x) es
@@ -336,12 +343,24 @@ inferSpine action t hd es = loop t hd id hd es
           -- 'IApply' with head @f@.  The conversion checker also accepts
           -- such terms, see 'compareElims'.
           -- Test case: test/Succeed/DoubleCheckEtaContractedPathLambda.agda.
-          (a, b) <- ifPiTypeB t (curry return) $ shouldBePath . ignoreBlocking
-          r' <- checkInternal' action r CmpLeq (unDom a)
+          -- For a head @f@ with a function type, the endpoints are
+          -- @f i0@ and @f i1@.
           izero <- primIZero
           ione  <- primIOne
+          (a, b, endpoints) <- ifPiTypeB t
+            (\ a b -> do
+              let at i = self `apply` [Arg (domInfo a) i]
+              return (a, b, Just (at izero, at ione)))
+            (shouldBePath . ignoreBlocking)
+          r' <- checkInternal' action r CmpLeq (unDom a)
           x' <- checkInternal' action x CmpLeq (b `absApp` izero)
           y' <- checkInternal' action y CmpLeq (b `absApp` ione)
+          -- Issue #8689: the endpoints stored in the elimination
+          -- have to be the endpoints of the head,
+          -- because @self i0@ reduces to @x@ and @self i1@ to @y@.
+          whenJust endpoints \ (x0, y0) -> do
+            equalTerm (b `absApp` izero) x x0
+            equalTerm (b `absApp` ione)  y y0
           let e' = IApply x' y' r'
           loop (b `absApp` r) (hd . (e:)) (accEs . (e':)) (accTm . (e':)) es
         Apply (Arg ai v) -> do
@@ -379,7 +398,7 @@ checkSpine action a hd es cmp t = do
                    , nest 4 $ prettyTCM es <+> ":"
                    , nest 2 $ prettyTCM t ] ]
   (t' , _es' , v') <- inferSpine action a hd es
-  t2 <- pathAsFunctionType t' t
+  (t2, checkEndpoints) <- pathAsFunctionType (hd es) t' t
   reportSDoc "tc.check.internal" 30 $ sep
     [ "checking if "
     , prettyTCM t'
@@ -393,12 +412,20 @@ checkSpine action a hd es cmp t = do
     , pretty =<< instantiate t2
     ]
   coerceSize cmp (hd es) t' t2
+  checkEndpoints
   return v'
 
--- | @pathAsFunctionType t' t@ changes the expected type @t@ where the
---   inferred type @t'@ is a function type and @t@ is a path type
---   @PathP A x y@: it replaces the path type by @(i : I) → A i@.
---   It also does this in the codomains of function types and path types.
+-- | @pathAsFunctionType v t' t@ changes the expected type @t@ of the
+--   term @v@ where the inferred type @t'@ is a function type and @t@ is
+--   a path type @PathP A x y@: it replaces the path type by
+--   @(i : I) → A i@.  It also does this in the codomains of function
+--   types and path types.
+--
+--   It also returns a check of the endpoints of @v@ for each replaced
+--   path type: @v i0 = x : A i0@ and @v i1 = y : A i1@ (issue #8689).
+--   For a path lambda, 'checkPathLambdaEndpoints' does the same check.
+--   The caller has to run the check after it has compared @t'@ with
+--   the new type, because only then is @v i0@ well-typed.
 --
 --   A term can have a function type @(i : I) → B@ where we expect a
 --   path type.  The reason: 'etaOnce' (also called by 'instantiateFull')
@@ -408,25 +435,91 @@ checkSpine action a hd es cmp t = do
 --   (see 'compareTerm'').
 --
 --   Test case: test/Succeed/DoubleCheckEtaContractedPathLambda.agda.
-pathAsFunctionType :: Type -> Type -> TCM Type
-pathAsFunctionType t' t =
+pathAsFunctionType :: Term -> Type -> Type -> TCM (Type, TCM ())
+pathAsFunctionType v t' t =
   -- Path types exist only if 'optCubical' is set (by --cubical or
   -- --erased-cubical).  This option is infective, so imported modules
   -- cannot bring path types into a module without it.
-  caseMaybeM (optCubical <$> pragmaOptions) (return t) $ \ _ ->
-    fromMaybe t <$> loop t' t
+  caseMaybeM (optCubical <$> pragmaOptions) (return (t, return ())) $ \ _ ->
+    fromMaybe (t, return ()) <$> loop v t' t
   where
     -- Returns 'Nothing' if there is no path type to replace.
-    loop :: Type -> Type -> TCM (Maybe Type)
-    loop inferred expected =
-      ifNotPiType inferred (\ _ -> return Nothing) $ \ _ b' ->
+    loop :: Term -> Type -> Type -> TCM (Maybe (Type, TCM ()))
+    loop w inferred expected =
+      ifNotPiType inferred (\ _ -> return Nothing) $ \ dom' b' -> do
+      -- The term under the binder.
+      let body = raise 1 w `apply` [Arg (domInfo dom') (var 0)]
       reduce expected >>= \case
-        El s (Pi a b) -> fmap (El s . Pi a . Abs (absName b)) <$>
-          addContext (absName b, a) (loop (absBody b') (absBody b))
-        u -> caseMaybeM (isPath u) (return Nothing) $ \ (a, b) -> do
-          c <- addContext (absName b, a) $ loop (absBody b') (absBody b)
-          return $ Just $ El (getSort u) $ Pi a $
-            Abs (absName b) $ fromMaybe (absBody b) c
+        El s (Pi a b) -> do
+          m <- addContext (absName b, a) $ loop body (absBody b') (absBody b)
+          return $ flip fmap m \ (c, check) ->
+            (El s $ Pi a $ Abs (absName b) c, addContext (absName b, a) check)
+        u -> (pathViewAsPi'whnf <*> pure u) >>= \case
+          Right _ -> return Nothing
+          Left ((a, b), (x, y)) -> do
+            m <- addContext (absName b, a) $ loop body (absBody b') (absBody b)
+            izero <- primIZero
+            ione  <- primIOne
+            let at i = w `apply` [Arg (domInfo dom') i]
+                check = do
+                  reportSDoc "tc.check.internal.cubical" 30 $ sep
+                    [ "checking endpoints of eta-contracted path lambda"
+                    , nest 2 $ prettyTCM w
+                    ]
+                  equalTerm (b `absApp` izero) (at izero) x
+                  equalTerm (b `absApp` ione)  (at ione)  y
+                  whenJust m $ addContext (absName b, a) . snd
+            return $ Just
+              (El (getSort u) $ Pi a $ Abs (absName b) $ maybe (absBody b) fst m, check)
+
+-- * Cubical boundaries and side conditions (issue #8689)
+
+-- The following checks look at the subterms before the 'Action' changes
+-- them.  (They see the term after 'preAction' and 'elimViewAction' at
+-- the current node, but the recursive calls have not yet changed its
+-- subterms.)  The types of subterms come from these unchanged subterms
+-- too (see e.g. 'inferSpine').  Thus an 'Action' that replaces
+-- subterms, like the one of 'Agda.TypeChecking.Abstract.abstractTerm',
+-- does not make these checks fail.
+
+-- | @checkPathLambdaEndpoints b u (x, y)@ checks that the path lambda
+--   with body @u@ has the endpoints @x@ and @y@ of its type
+--   @PathP (λ i → b) x y@:
+--   @u[i0] = x : b[i0]@ and @u[i1] = y : b[i1]@.
+--
+--   The type checker checks the same in
+--   'Agda.TypeChecking.Rules.Term.checkPath'.
+checkPathLambdaEndpoints :: Abs Type -> Abs Term -> (Term, Term) -> TCM ()
+checkPathLambdaEndpoints b u (x, y) = do
+  izero <- primIZero
+  ione  <- primIOne
+  reportSDoc "tc.check.internal.cubical" 30 $ sep
+    [ "checking endpoints of path lambda"
+    , nest 2 $ prettyTCM (Lam defaultArgInfo u)
+    ]
+  equalTerm (b `absApp` izero) (u `absApp` izero) x
+  equalTerm (b `absApp` ione)  (u `absApp` ione)  y
+
+-- | Check the side condition of a cubical primitive applied to the
+--   eliminations, if the definition is one.
+--
+--   The arguments of the primitive are the 'Apply' eliminations at
+--   the start.  Other eliminations can follow them, for example a
+--   projection-like function that 'elimViewAction' put into postfix
+--   form.
+--
+--   The type checker checks these side conditions in
+--   'Agda.TypeChecking.Rules.Application.checkHeadApplication'.
+--   It rejects a primitive that is not applied to enough arguments.
+--   Here we skip the check in this case, as there is nothing to check.
+checkCubicalSideCondition :: Definition -> Elims -> TCM ()
+checkCubicalSideCondition def es = case theDef def of
+  Primitive{ primName } | Just side <- cubicalSideCondition primName ->
+    whenJustM (side $ fst $ splitApplyElims es) \ sc -> do
+      reportSDoc "tc.check.internal.cubical" 30 $
+        "checking side condition of" <+> prettyTCM (Def (defName def) es)
+      sideConditionCheck sc
+  _ -> return ()
 
 instance CheckInternal Sort where
   checkInternal' action s cmp _ = case s of

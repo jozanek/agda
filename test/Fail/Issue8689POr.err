@@ -1,0 +1,11 @@
+Issue8689POr.agda:20.1-14: error: [UnequalTerms]
+The terms
+  y
+and
+  w
+are not equal at type Nat
+when checking that the type
+(x y : Nat) (p : x ≡ y) (j : I) (w : Nat) →
+Reveal Nat (hcomp (λ i → primPOr j j (λ ._ → y) (λ ._ → w)) y)
+of the generated with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

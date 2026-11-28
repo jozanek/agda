@@ -1,0 +1,12 @@
+Issue8689Transp.agda:28.3-16: error: [UnequalTerms]
+The terms
+  i
+and
+  i0
+are not equal at type I
+when checking that the type
+(x : Nat) (p : x ≡ 0) (j : I) (w : Nat) (A : I → Set)
+(a : F w i0) →
+Reveal (F w i1) (transp (F w) j a)
+of the generated with function is well-formed
+(https://agda.readthedocs.io/en/v2.10.0/language/with-abstraction.html#ill-typed-with-abstractions)

@@ -45,9 +45,9 @@ import Agda.TypeChecking.InstanceArguments (postponeInstanceConstraints)
 import Agda.TypeChecking.Level
 import Agda.TypeChecking.MetaVars
 import Agda.TypeChecking.Modalities
-import Agda.TypeChecking.Names
 import Agda.TypeChecking.Pretty
 import Agda.TypeChecking.Primitive hiding (Nat)
+import Agda.TypeChecking.Primitive.Cubical.SideConditions
 import Agda.TypeChecking.Monad
 import Agda.TypeChecking.Records
 import Agda.TypeChecking.Reduce
@@ -452,20 +452,13 @@ cubicalPrimitiveArgsCheck ::
        -- ^ The head of the application.
   -> TCM (Maybe (ArgRanges -> Args -> Type -> TCM Args))
 cubicalPrimitiveArgsCheck hd = case unScope hd of
-    A.Def c -> loop c
-      [ (builtinComp  , checkPrimComp )
-      , (builtinHComp , checkPrimHComp)
-      , (builtinTrans , checkPrimTrans)
-      , (builtinPOr   , checkPOr      )
-      , (builtin_glue , check_glue    )
-      , (builtin_glueU, check_glueU   )
-      ]
+    -- 'getConstInfo'' does not throw, so the type checker can report
+    -- a problem with the head later, in 'inferHead'.
+    A.Def c -> getConstInfo' c <&> \case
+      Right def | Primitive{ primName } <- theDef def ->
+        checkSideCondition c <$> cubicalSideCondition primName
+      _ -> Nothing
     _ -> return Nothing
-  where
-    loop _ [] = return Nothing
-    loop c ((b, k) : bks) = getNameOfConstrained b >>= \case
-      Just c' | c' == c -> return $ Just $ k c
-      _ -> loop c bks
 
 -- | Check the side conditions on the arguments of a cubical primitive
 --   (if the head is one), and return the possibly updated (blocked) arguments.
@@ -1749,172 +1742,25 @@ pathAbs (OType _) t = __IMPOSSIBLE__
 pathAbs (PathType s path l a x y) t = do
   return $ Lam defaultArgInfo t
 
--- | @primComp : ∀ {ℓ} (A : (i : I) → Set (ℓ i)) (φ : I) (u : ∀ i → Partial φ (A i)) (a : A i0) → A i1@
---
---   Check:  @u i0 = (λ _ → a) : Partial φ (A i0)@.
---
-checkPrimComp :: QName -> ArgRanges -> Args -> Type -> TCM Args
-checkPrimComp c rs vs _ = do
-  case vs of
-    -- WAS: [l, a, phi, u, a0] -> do
-    l : a : phi : u : a0 : rest -> do
-      iz <- Arg defaultArgInfo <$> intervalUnview IZero
-      let lz = unArg l `apply` [iz]
-          az = unArg a `apply` [iz]
-      ty <- el's (pure (unArg l `apply` [iz])) $ primPartial <#> pure (unArg l `apply` [iz]) <@> pure (unArg phi) <@> pure (unArg a `apply` [iz])
-      bAz <- el' (pure $ lz) (pure $ az)
-      a0 <- blockArg bAz (rs !!! 4) a0 $ do
-        equalTerm ty -- (El (getSort t1) (apply (unArg a) [iz]))
-          (Lam defaultArgInfo $ NoAbs "_" $ unArg a0)
-          (apply (unArg u) [iz])
-      return $ l : a : phi : u : a0 : rest
-    _ -> typeError $ CubicalPrimitiveNotFullyApplied c
-
--- | @primHComp : ∀ {ℓ} {A : Set ℓ} {φ : I} (u : ∀ i → Partial φ A) (a : A) → A@
---
---   Check:  @u i0 = (λ _ → a) : Partial φ A@.
---
-checkPrimHComp :: QName -> ArgRanges -> Args -> Type -> TCM Args
-checkPrimHComp c rs vs _ = do
-  case vs of
-    -- WAS: [l, a, phi, u, a0] -> do
-    l : a : phi : u : a0 : rest -> do
-      -- iz = i0
-      iz <- Arg defaultArgInfo <$> intervalUnview IZero
-      -- ty = Partial φ A
-      ty <- el's (pure (unArg l)) $ primPartial <#> pure (unArg l) <@> pure (unArg phi) <@> pure (unArg a)
-      -- (λ _ → a) = u i0 : ty
-      bA <- el' (pure $ unArg l) (pure $ unArg a)
-      a0 <- blockArg bA (rs !!! 4) a0 $ do
-        equalTerm ty -- (El (getSort t1) (apply (unArg a) [iz]))
-            (Lam defaultArgInfo $ NoAbs "_" $ unArg a0)
-            (apply (unArg u) [iz])
-      return $ l : a : phi : u : a0 : rest
-    _ -> typeError $ CubicalPrimitiveNotFullyApplied c
-
--- | @transp : ∀{ℓ} (A : (i : I) → Set (ℓ i)) (φ : I) (a0 : A i0) → A i1@
---
---   Check:  If φ, then @A i = A i0 : Set (ℓ i)@ must hold for all @i : I@.
---
-checkPrimTrans :: QName -> ArgRanges -> Args -> Type -> TCM Args
-checkPrimTrans c rs vs _ = do
-  case vs of
-    -- Andreas, 2019-03-02, issue #3601, why exactly 4 arguments?
-    -- Only 3 are needed to check the side condition.
-    -- WAS:
-    -- [l, a, phi, a0] -> do
-    l : a : phi : rest -> do
-      iz <- Arg defaultArgInfo <$> intervalUnview IZero
-      -- ty = (i : I) -> Set (l i)
-      ty <- runNamesT [] $ do
-        l <- open $ unArg l
-        nPi' "i" primIntervalType $ \ i -> (sort . tmSort <$> (l <@> i))
-      a <- blockArg ty (rs !!! 1) a $ do
-        equalTermOnFace (unArg phi) ty
-          (unArg a)
-          (Lam defaultArgInfo $ NoAbs "_" $ apply (unArg a) [iz])
-      return $ l : a : phi : rest
-    _ -> typeError $ CubicalPrimitiveNotFullyApplied c
+-- | Check the side condition of a cubical primitive.
+--   The side conditions are defined in
+--   "Agda.TypeChecking.Primitive.Cubical.SideConditions".
+--   The argument that the side condition is about is blocked on the
+--   side condition.
+checkSideCondition ::
+     QName
+       -- ^ The cubical primitive.
+  -> (Args -> TCM (Maybe SideCondition))
+       -- ^ Its side condition, see 'cubicalSideCondition'.
+  -> ArgRanges -> Args -> Type -> TCM Args
+checkSideCondition c side rs vs _ = side vs >>= \case
+  Nothing -> typeError $ CubicalPrimitiveNotFullyApplied c
+  Just (SideCondition i t check) -> case splitAt i vs of
+    (before, a : after) -> do
+      a <- blockArg t (rs !!! i) a check
+      return $ before ++ a : after
+    _ -> __IMPOSSIBLE__
 
 blockArg :: HasRange r => Type -> r -> Arg Term -> TCM () -> TCM (Arg Term)
 blockArg t r a m =
   setCurrentRange (getRange $ r) $ fmap (a $>) $ blockTerm t $ m >> return (unArg a)
-
--- The following comment contains silly ' escapes to calm CPP about ∨ (\vee).
--- May not be haddock-parseable.
-
--- ' @primPOr : ∀ {ℓ} (φ₁ φ₂ : I) {A : Partial (φ₁ ∨ φ₂) (Set ℓ)}
--- '         → (u : PartialP φ₁ (λ (o : IsOne φ₁) → A (IsOne1 φ₁ φ₂ o)))
--- '         → (v : PartialP φ₂ (λ (o : IsOne φ₂) → A (IsOne2 φ₁ φ₂ o)))
--- '         → PartialP (φ₁ ∨ φ₂) A@
--- '
--- ' Checks: @u = v : PartialP (φ₁ ∨ φ₂) A@ whenever @IsOne (φ₁ ∧ φ₂)@.
-checkPOr :: QName -> ArgRanges -> Args -> Type -> TCM Args
-checkPOr c rs vs _ = do
-  case vs of
-   l : phi1 : phi2 : a : u : v : rest -> do
-      phi <- intervalUnview (IMin phi1 phi2)
-      reportSDoc "tc.term.por" 10 $ text (show phi)
-      t1 <- runNamesT [] $ do
-             l <- open . unArg $ l
-             a <- open . unArg $ a
-             psi <- open =<< intervalUnview (IMax phi1 phi2)
-             pPi' "o" psi $ \ o -> el' l (a <..> o)
-      tv <- runNamesT [] $ do
-             l    <- open . unArg $ l
-             a    <- open . unArg $ a
-             phi1 <- open . unArg $ phi1
-             phi2 <- open . unArg $ phi2
-             pPi' "o" phi2 $ \ o -> el' l (a <..> (cl primIsOne2 <@> phi1 <@> phi2 <@> o))
-      v <- blockArg tv (rs !!! 5) v $ do
-        -- ' φ₁ ∧ φ₂  ⊢ u , v : PartialP (φ₁ ∨ φ₂) \ o → a o
-        equalTermOnFace phi t1 (unArg u) (unArg v)
-      return $ l : phi1 : phi2 : a : u : v : rest
-   _ -> typeError $ CubicalPrimitiveNotFullyApplied c
-
--- | @prim^glue : ∀ {ℓ ℓ'} {A : Set ℓ} {φ : I}
---              → {T : Partial φ (Set ℓ')} → {e : PartialP φ (λ o → T o ≃ A)}
---              → (t : PartialP φ T) → (a : A) → primGlue A T e@
---
---   Check   @φ ⊢ a = e 1=1 (t 1=1)@  or actually the equivalent:  @(\ _ → a) = (\ o -> e o (t o)) : PartialP φ A@
-check_glue :: QName -> ArgRanges -> Args -> Type -> TCM Args
-check_glue c rs vs _ = do
-  case vs of
-   -- WAS: [la, lb, bA, phi, bT, e, t, a] -> do
-   la : lb : bA : phi : bT : e : t : a : rest -> do
-      v <- runNamesT [] $ do
-            lb  <- open . unArg $ lb
-            la  <- open . unArg $ la
-            bA  <- open . unArg $ bA
-            phi <- open . unArg $ phi
-            bT  <- open . unArg $ bT
-            e   <- open . unArg $ e
-            t   <- open . unArg $ t
-            let f o = cl primEquivFun <#> lb <#> la <#> (bT <..> o) <#> bA <@> (e <..> o)
-            glam defaultIrrelevantArgInfo "o" $ \ o -> f o <@> (t <..> o)
-      ty <- runNamesT [] $ do
-            lb  <- open . unArg $ lb
-            phi <- open . unArg $ phi
-            bA  <- open . unArg $ bA
-            el's lb $ cl primPartialP <#> lb <@> phi <@> glam defaultIrrelevantArgInfo "o" (\ _ -> bA)
-      let a' = Lam defaultIrrelevantArgInfo (NoAbs "o" $ unArg a)
-      ta <- el' (pure $ unArg la) (pure $ unArg bA)
-      a <- blockArg ta (rs !!! 7) a $ equalTerm ty a' v
-      return $ la : lb : bA : phi : bT : e : t : a : rest
-   _ -> typeError $ CubicalPrimitiveNotFullyApplied c
-
-
--- | @prim^glueU : ∀ {ℓ} {φ : I}
---              → {T : I → Partial φ (Set ℓ)} → {A : Set ℓ [ φ ↦ T i0 ]}
---              → (t : PartialP φ (T i1)) → (a : outS A) → hcomp T (outS A)@
---
---   Check   @φ ⊢ a = transp (\ i -> T 1=1 (~ i)) i0 (t 1=1)@  or actually the equivalent:
---           @(\ _ → a) = (\o -> transp (\ i -> T o (~ i)) i0 (t o)) : PartialP φ (T i0)@
-check_glueU :: QName -> ArgRanges -> Args -> Type -> TCM Args
-check_glueU c rs vs _ = do
-  case vs of
-   -- WAS: [la, lb, bA, phi, bT, e, t, a] -> do
-   la : phi : bT : bA : t : a : rest -> do
-      v <- runNamesT [] $ do
-            la  <- open . unArg $ la
-            phi <- open . unArg $ phi
-            bT  <- open . unArg $ bT
-            bA  <- open . unArg $ bA
-            t   <- open . unArg $ t
-            let f o = cl primTrans <#> lam "i" (const la) <@> lam "i" (\ i -> bT <@> (cl primINeg <@> i) <..> o) <@> cl primIZero
-            glam defaultIrrelevantArgInfo "o" $ \ o -> f o <@> (t <..> o)
-      ty <- runNamesT [] $ do
-            la  <- open . unArg $ la
-            phi <- open . unArg $ phi
-            bT  <- open . unArg $ bT
-            pPi' "o" phi $ \ o -> el' la (bT <@> cl primIZero <..> o)
-      let a' = Lam defaultIrrelevantArgInfo (NoAbs "o" $ unArg a)
-      ta <- runNamesT [] $ do
-            la  <- open . unArg $ la
-            phi <- open . unArg $ phi
-            bT  <- open . unArg $ bT
-            bA  <- open . unArg $ bA
-            el' la (cl primSubOut <#> (cl primLevelSuc <@> la) <#> (Sort . tmSort <$> la) <#> phi <#> (bT <@> cl primIZero) <@> bA)
-      a <- blockArg ta (rs !!! 5) a $ equalTerm ty a' v
-      return $ la : phi : bT : bA : t : a : rest
-   _ -> typeError $ CubicalPrimitiveNotFullyApplied c
